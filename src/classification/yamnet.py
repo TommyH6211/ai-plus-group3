@@ -57,8 +57,8 @@ class YAMNetClassifier:
         # Average the predictions across the audio clip.
         mean_scores = tf.reduce_mean(scores, axis=0).numpy()
 
-        # Find the five strongest predictions.
-        top_indices = np.argsort(mean_scores)[::-1][:5]
+        # Find the ten strongest predictions.
+        top_indices = np.argsort(mean_scores)[::-1][:10]
 
         results = []
 
