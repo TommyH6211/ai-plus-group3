@@ -5,10 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e0e1a850-5f7b-4a6a-bd76-b79e3dc50cb4" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/classification/yamnet.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/classification/yamnet.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/tests_yamnet.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/tests_yamnet.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/classification/sound_mapping.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/classification/sound_mapping.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -148,7 +146,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1789258864072</updated>
-      <workItem from="1789258865581" duration="6289000" />
+      <workItem from="1789258865581" duration="13834000" />
     </task>
     <servers />
   </component>
