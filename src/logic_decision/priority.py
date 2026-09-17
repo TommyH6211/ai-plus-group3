@@ -30,4 +30,4 @@ def get_priority(sound, user_settings=None):
     if user_settings is None:
         user_settings = DEFAULT_PRIORITIES
 
-    return user_settings.get(sound, "OFF")
+    return user_settings.get(sound, "Off")

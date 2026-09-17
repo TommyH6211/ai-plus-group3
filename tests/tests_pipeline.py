@@ -15,4 +15,5 @@ print(f"Sound: {result['sound']}")
 print(f"Confidence: {result['confidence']:.3f}")
 print(f"Direction: {result['direction']}")
 print(f"Priority: {result['priority']}")
+print(f"Haptic: {result['haptic']}")
 

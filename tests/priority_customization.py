@@ -23,9 +23,9 @@ def get_user_priorities():
 
         print(f"{sound}")
         print("1. URGENT")
-        print("2. ATTENTION")
-        print("3. AWARENESS")
-        print("4. OFF")
+        print("2. Attention needed")
+        print("3. General awareness")
+        print("4. Off")
 
         while True:
             choice = input("Choose priority (1-4): ")

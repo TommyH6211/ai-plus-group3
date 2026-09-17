@@ -4,6 +4,7 @@ from src.classification.yamnet import YAMNetClassifier
 from src.classification.sound_mapping import map_yamnet_prediction
 from src.localization.gcc_phat import estimate_direction
 from src.logic_decision.priority import get_priority
+from src.logic_decision.haptics import get_haptic_file
 
 
 class SoundAwarenessPipeline:
@@ -55,10 +56,13 @@ class SoundAwarenessPipeline:
             self.user_settings
         )
 
+        haptic_file = get_haptic_file(priority)
+
         # 8. Create the final result
         return {
             "sound": sound,
             "confidence": confidence,
             "direction": direction,
             "priority": priority,
+            "haptic": haptic_file,
         }
