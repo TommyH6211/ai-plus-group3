@@ -4,14 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="e0e1a850-5f7b-4a6a-bd76-b79e3dc50cb4" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/src/logic_decision/haptic_patterns.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/logic_decision/haptics.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/logic_decision/priority.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/logic_decision/priority.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/pipeline.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/priority_customization.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/priority_customization.py" afterDir="false" />
-    </list>
+    <list default="true" id="e0e1a850-5f7b-4a6a-bd76-b79e3dc50cb4" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -153,7 +146,7 @@
       <workItem from="1789258865581" duration="16086000" />
       <workItem from="1789324367741" duration="661000" />
       <workItem from="1789325033900" duration="15000" />
-      <workItem from="1789644332503" duration="709000" />
+      <workItem from="1789644332503" duration="831000" />
     </task>
     <servers />
   </component>
