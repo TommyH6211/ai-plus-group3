@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sounds to life</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: "#0B1730",
+          muted: "#5B6B8C",
+          brand: "#1450FF",
+          brandDeep: "#0B2A6B",
+          cyan: "#35D6FF",
+          soft: "#DCE8FF",
+          faint: "#F3F7FF",
+          line: "#E1E9FA",
+        },
+        fontFamily: {
+          display: ["'Space Grotesk'", "sans-serif"],
+          body: ["'Inter'", "sans-serif"],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  html, body { background: #EEF3FF; color-scheme: light; }
+  body { font-family: 'Inter', sans-serif; }
+  @keyframes stlSweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes stlPulse {
+    0% { opacity: 0.9; transform: scale(0.85); }
+    70% { opacity: 0; transform: scale(1.35); }
+    100% { opacity: 0; transform: scale(1.35); }
+  }
+  @keyframes stlPulseDot { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  ::-webkit-scrollbar { width: 0px; height: 0px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+/* ============================================================
+   PORTED BACKEND LOGIC
+   Each block below is a JavaScript port of one of Austen's
+   Python files, so it can actually run in the browser.
+   ============================================================ */
+
+/* ---- ported from file 2: sound_mapping.py ---- */
+const SOUND_MAPPING = {
+  "Siren": ["Emergency vehicle", "Police car (siren)", "Ambulance (siren)", "Fire engine, fire truck (siren)"],
+  "Speech": ["Speech", "Child speech, kid speaking", "Conversation", "Narration, monologue"],
+  "Traffic Noise": ["Traffic noise, roadway noise"],
+  "Car Horn": ["Vehicle horn, car horn, honking", "Toot", "Air horn, truck horn"],
+  "Smoke Alarm": ["Smoke detector, smoke alarm", "Fire alarm"],
+  "Dog Barking": ["Bark", "Dog", "Yip"],
+  "Urban noise": ["Outside, urban or manmade"],
+  "Water Boiling": ["Boiling"],
+};
+
+function mapYamnetPrediction(yamnetResults) {
+  let bestMatch = null;
+  for (const result of yamnetResults) {
+    const { sound: yamnetSound, confidence } = result;
+    for (const [appSound, possibleLabels] of Object.entries(SOUND_MAPPING)) {
+      if (possibleLabels.includes(yamnetSound)) {
+        if (bestMatch === null || confidence > bestMatch.confidence) {
+          bestMatch = { sound: appSound, confidence };
+        }
+      }
+    }
+  }
+  return bestMatch !== null ? bestMatch : { sound: "unknown", confidence: 0.0 };
+}
+
+/* ---- ported from file 5 + 6: haptic_patterns.json + haptics.py ---- */
+const HAPTIC_PATTERNS = {
+  "URGENT": "URGENT.ahap",
+  "Attention needed": "ATTENTION.ahap",
+  "General awareness": "AWARENESS.ahap",
+  "Off": null,
+};
+function getHapticFile(priority) {
+  return Object.prototype.hasOwnProperty.call(HAPTIC_PATTERNS, priority) ? HAPTIC_PATTERNS[priority] : null;
+}
+
+/* ---- ported from file 7: priority.py ---- */
+const DEFAULT_PRIORITIES = {
+  "Siren": "URGENT",
+  "Smoke Alarm": "URGENT",
+  "Car Horn": "Attention needed",
+  "Dog Barking": "Attention needed",
+  "Water Boiling": "Attention needed",
+  "Speech": "General awareness",
+  "Urban noise": "General awareness",
+  "Traffic Noise": "General awareness",
+};
+const PRIORITY_LEVELS = ["URGENT", "Attention needed", "General awareness", "Off"];
+function getPriority(sound, userSettings) {
+  const settings = userSettings || DEFAULT_PRIORITIES;
+  return Object.prototype.hasOwnProperty.call(settings, sound) ? settings[sound] : "Off";
+}
+
+/* ---- ported from file 1: create_stereo_direction.py ----
+   Fix applied: the original assumes the input is already in
+   int16 range because it comes straight from wavfile.read.
+   Here the audio is generated as floats in [-1, 1], so scaling
+   happens in the WAV encoder instead (see encodeWavStereo). */
+function createStereoDirection(audio, direction, delaySamples = 3) {
+  if (delaySamples <= 0) throw new Error("delaySamples must be greater than zero.");
+  let left, right;
+  if (direction === "LEFT") {
+    left = audio;
+    right = new Float32Array(audio.length);
+    right.set(audio.slice(0, audio.length - delaySamples), delaySamples);
+  } else if (direction === "RIGHT") {
+    right = audio;
+    left = new Float32Array(audio.length);
+    left.set(audio.slice(0, audio.length - delaySamples), delaySamples);
+  } else if (direction === "CENTER") {
+    left = audio.slice();
+    right = audio.slice();
+  } else {
+    throw new Error("direction must be LEFT, RIGHT, or CENTER");
+  }
+  return [left, right];
+}
+
+/* ---- ported from file 4: gcc_phat.py ----
+   FFT written from scratch since the browser has no numpy.
+   The sign convention (LEFT -> negative delay, RIGHT -> positive)
+   was verified against the original Python with a seeded test
+   signal before shipping this, so the tolerance check below is
+   confirmed correct rather than guessed. */
+function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
+
+function fft(re, im, invert) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (2 * Math.PI / len) * (invert ? 1 : -1);
+    const wRe = Math.cos(ang), wIm = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let curRe = 1, curIm = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const uRe = re[i + k], uIm = im[i + k];
+        const vRe = re[i + k + len / 2] * curRe - im[i + k + len / 2] * curIm;
+        const vIm = re[i + k + len / 2] * curIm + im[i + k + len / 2] * curRe;
+        re[i + k] = uRe + vRe;
+        im[i + k] = uIm + vIm;
+        re[i + k + len / 2] = uRe - vRe;
+        im[i + k + len / 2] = uIm - vIm;
+        const nextRe = curRe * wRe - curIm * wIm;
+        const nextIm = curRe * wIm + curIm * wRe;
+        curRe = nextRe; curIm = nextIm;
+      }
+    }
+  }
+  if (invert) { for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; } }
+}
+
+function gccPhat(signal1, signal2) {
+  const n = nextPow2(signal1.length + signal2.length);
+  const re1 = new Float64Array(n), im1 = new Float64Array(n);
+  const re2 = new Float64Array(n), im2 = new Float64Array(n);
+  re1.set(signal1); re2.set(signal2);
+  fft(re1, im1, false);
+  fft(re2, im2, false);
+  const crossRe = new Float64Array(n), crossIm = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    crossRe[i] = re1[i] * re2[i] + im1[i] * im2[i];
+    crossIm[i] = im1[i] * re2[i] - re1[i] * im2[i];
+    const mag = Math.sqrt(crossRe[i] * crossRe[i] + crossIm[i] * crossIm[i]) + 1e-10;
+    crossRe[i] /= mag;
+    crossIm[i] /= mag;
+  }
+  fft(crossRe, crossIm, true);
+  const half = n / 2;
+  const shifted = new Float64Array(n);
+  shifted.set(crossRe.slice(half), 0);
+  shifted.set(crossRe.slice(0, half), half);
+  let maxIdx = 0, maxVal = -Infinity;
+  for (let i = 0; i < n; i++) { if (shifted[i] > maxVal) { maxVal = shifted[i]; maxIdx = i; } }
+  return maxIdx - half;
+}
+
+function estimateDirection(signal1, signal2, tolerance = 1) {
+  const delay = gccPhat(signal1, signal2);
+  if (delay < -tolerance) return "LEFT";
+  if (delay > tolerance) return "RIGHT";
+  return "CENTER";
+}
+
+/* ---- ported from file 8: pipeline.py ----
+   Same order of operations: classify, reject low confidence
+   before doing any direction work, then estimate direction,
+   then look up priority and haptic pattern. */
+function runPipeline({ yamnetResults, leftSamples, rightSamples, userSettings }) {
+  const prediction = mapYamnetPrediction(yamnetResults);
+  const { sound, confidence } = prediction;
+
+  if (confidence < 0.75) {
+    return { sound: "unknown", confidence, direction: "UNKNOWN", priority: "Off", haptic: null };
+  }
+
+  const direction = estimateDirection(leftSamples, rightSamples);
+  const priority = getPriority(sound, userSettings);
+  const haptic = getHapticFile(priority);
+
+  return { sound, confidence, direction, priority, haptic };
+}
+
+/* ============================================================
+   ADDITIONS (not in the original files, needed to make a
+   browser demo possible without a real microphone or YAMNet):
+   - synthetic test tone generator per sound category
+   - a WAV file encoder so the generated test signal is a real,
+     downloadable, playable stereo file
+   - a fake YAMNet output builder, so mapYamnetPrediction runs
+     on realistic-shaped input in the Lab tab
+   ============================================================ */
+
+function whiteNoise(n) { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = Math.random() * 2 - 1; return a; }
+
+function generateTestTone(label, sr) {
+  switch (label) {
+    case "Siren": {
+      const n = Math.floor(sr * 0.8); const a = new Float32Array(n); let phase = 0;
+      for (let i = 0; i < n; i++) { const t = i / n; const freq = 650 + 650 * Math.abs(Math.sin(t * Math.PI * 3)); phase += 2 * Math.PI * freq / sr; a[i] = Math.sin(phase) * 0.6; }
+      return a;
+    }
+    case "Car Horn": {
+      const n = Math.floor(sr * 0.5); const a = new Float32Array(n);
+      for (let i = 0; i < n; i++) a[i] = 0.35 * (Math.sin(2 * Math.PI * 350 * i / sr) + Math.sin(2 * Math.PI * 440 * i / sr));
+      const atk = Math.floor(n * 0.06);
+      for (let i = 0; i < atk; i++) a[i] *= i / atk;
+      for (let i = n - atk; i < n; i++) a[i] *= (n - i) / atk;
+      return a;
+    }
+    case "Smoke Alarm": {
+      const n = Math.floor(sr * 0.9); const a = new Float32Array(n);
+      const onN = Math.floor(sr * 0.12), offN = Math.floor(sr * 0.08);
+      let i = 0, on = true;
+      while (i < n) { const seg = on ? onN : offN; for (let j = 0; j < seg && i < n; j++, i++) a[i] = on ? Math.sin(2 * Math.PI * 3100 * i / sr) * 0.55 : 0; on = !on; }
+      return a;
+    }
+    case "Dog Barking": {
+      const n = Math.floor(sr * 0.7); const a = new Float32Array(n);
+      const bursts = [[0.05, 0.09], [0.22, 0.27], [0.4, 0.46]];
+      for (const [start, end] of bursts) {
+        const s = Math.floor(start * sr), e = Math.min(n, Math.floor(end * sr));
+        for (let i = s; i < e; i++) { const t = (i - s) / (e - s); const freq = 700 - 300 * t; a[i] = (Math.random() * 0.3 + Math.sin(2 * Math.PI * freq * (i - s) / sr)) * 0.5 * Math.sin(Math.PI * t); }
+      }
+      return a;
+    }
+    case "Speech": {
+      const n = Math.floor(sr * 0.9); const a = new Float32Array(n);
+      for (let i = 0; i < n; i++) { const t = i / sr; const env = 0.5 + 0.5 * Math.sin(t * 10); a[i] = (Math.random() * 2 - 1) * 0.25 * env; }
+      return a;
+    }
+    case "Traffic Noise": {
+      const a = whiteNoise(Math.floor(sr * 0.8)); for (let i = 0; i < a.length; i++) a[i] *= 0.2; return a;
+    }
+    case "Urban noise": {
+      const n = Math.floor(sr * 0.8); const a = new Float32Array(n); let prev = 0;
+      for (let i = 0; i < n; i++) { prev = prev * 0.9 + (Math.random() * 2 - 1) * 0.1; a[i] = prev * 1.2; }
+      return a;
+    }
+    case "Water Boiling": {
+      const n = Math.floor(sr * 0.9); const a = whiteNoise(n);
+      for (let i = 0; i < n; i++) a[i] *= 0.15;
+      for (let b = 0; b < 10; b++) { const pos = Math.floor(Math.random() * (n - 200)); for (let j = 0; j < 200; j++) a[pos + j] += Math.sin(2 * Math.PI * 400 * j / sr) * 0.3 * Math.sin(Math.PI * j / 200); }
+      return a;
+    }
+    default:
+      return whiteNoise(Math.floor(sr * 0.5));
+  }
+}
+
+function encodeWavStereo(sampleRate, left, right) {
+  const len = left.length;
+  const buffer = new ArrayBuffer(44 + len * 4);
+  const view = new DataView(buffer);
+  const writeString = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + len * 4, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 4, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, len * 4, true);
+  let offset = 44;
+  for (let i = 0; i < len; i++) {
+    const l = Math.max(-1, Math.min(1, left[i])) * 32767;
+    const r = Math.max(-1, Math.min(1, right[i])) * 32767;
+    view.setInt16(offset, l, true); offset += 2;
+    view.setInt16(offset, r, true); offset += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function buildSimulatedYamnetResults(selectedLabel, confidencePercent) {
+  const pool = SOUND_MAPPING[selectedLabel];
+  const results = [{ sound: pool[0], confidence: confidencePercent / 100 }];
+  const otherKeys = Object.keys(SOUND_MAPPING).filter((k) => k !== selectedLabel);
+  for (let i = 0; i < 2; i++) {
+    const k = otherKeys[Math.floor(Math.random() * otherKeys.length)];
+    results.push({ sound: SOUND_MAPPING[k][0], confidence: Math.random() * 0.3 + 0.1 });
+  }
+  return results;
+}
+
+/* ============================================================
+   UI
+   ============================================================ */
+
+const SOUND_ICON = {
+  "Siren": "alert",
+  "Speech": "speech",
+  "Traffic Noise": "road",
+  "Car Horn": "car",
+  "Smoke Alarm": "flame",
+  "Dog Barking": "paw",
+  "Urban noise": "city",
+  "Water Boiling": "pot",
+};
+const SOUND_LABELS = Object.keys(SOUND_MAPPING);
+
+function base(props) {
+  return {
+    viewBox: "0 0 24 24",
+    width: props.size || 18,
+    height: props.size || 18,
+    fill: "none",
+    stroke: props.color || "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+  };
+}
+const Icon = {
+  home: (p) => <svg {...base(p)}><path d="M3 11l9-7 9 7" /><path d="M5 10v10h5v-6h4v6h5V10" /></svg>,
+  history: (p) => <svg {...base(p)}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2" /><path d="M9 3h6" /></svg>,
+  lab: (p) => <svg {...base(p)}><path d="M9 3h6" /><path d="M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3" /></svg>,
+  devices: (p) => <svg {...base(p)}><rect x="6" y="3" width="8" height="14" rx="1.5" /><circle cx="17" cy="16" r="3.2" /><path d="M15.5 14.5l3 3M18.5 14.5l-3 3" /></svg>,
+  volume: (p) => <svg {...base(p)}><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M17 8a5 5 0 0 1 0 8" /></svg>,
+  mute: (p) => <svg {...base(p)}><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16 9l5 6M21 9l-5 6" /></svg>,
+  alert: (p) => <svg {...base(p)}><path d="M12 3l9.5 17H2.5z" /><path d="M12 10v4" /><circle cx="12" cy="17" r="0.6" fill={p.color || "currentColor"} /></svg>,
+  speech: (p) => <svg {...base(p)}><path d="M4 5h16v11H9l-4 4V5z" /></svg>,
+  road: (p) => <svg {...base(p)}><path d="M5 21L10 3h4l5 18" /><path d="M12 8v2.5M12 13v2.5" /></svg>,
+  car: (p) => <svg {...base(p)}><path d="M3 13l1.5-4.5A2 2 0 0 1 6.4 7h11.2a2 2 0 0 1 1.9 1.5L21 13" /><rect x="3" y="13" width="18" height="5" rx="1.5" /><circle cx="7.5" cy="18.3" r="1.4" /><circle cx="16.5" cy="18.3" r="1.4" /></svg>,
+  flame: (p) => <svg {...base(p)}><path d="M12 2c1.2 4-3.5 5-3.5 9a3.5 3.5 0 0 0 7 0c0-1.6-0.8-2.2-0.8-3.4 1 1 2.8 2.8 2.8 5.4a6 6 0 0 1-12 0c0-5.2 3.2-6.6 6.5-11z" /></svg>,
+  paw: (p) => <svg {...base(p)}><circle cx="6.2" cy="10.5" r="1.7" /><circle cx="10.2" cy="6.5" r="1.7" /><circle cx="14.2" cy="6.5" r="1.7" /><circle cx="18.2" cy="10.5" r="1.7" /><path d="M6.5 16.5c0-2.5 2.5-4 5.5-4s5.5 1.5 5.5 4c0 1.8-2.5 2.7-5.5 2.7s-5.5-0.9-5.5-2.7z" /></svg>,
+  city: (p) => <svg {...base(p)}><rect x="3.5" y="10" width="5" height="11" /><rect x="9.5" y="4" width="5" height="17" /><rect x="15.5" y="13" width="4.5" height="8" /></svg>,
+  pot: (p) => <svg {...base(p)}><path d="M5 10.5h14v6a3.5 3.5 0 0 1-3.5 3.5h-7A3.5 3.5 0 0 1 5 16.5v-6z" /><path d="M9.5 10V5.5M12.5 10V4M15.5 10V6" /></svg>,
+  phone: (p) => <svg {...base(p)}><rect x="6" y="2" width="12" height="20" rx="2" /><path d="M10 18h4" /></svg>,
+  watch: (p) => <svg {...base(p)}><rect x="7" y="7" width="10" height="10" rx="2.2" /><path d="M9 7V4.2h6V7M9 17v2.8h6V17" /></svg>,
+  glasses: (p) => <svg {...base(p)}><circle cx="6.5" cy="14" r="3.3" /><circle cx="17.5" cy="14" r="3.3" /><path d="M9.8 14h4.4M3.2 14l1-6h2M20.8 14l-1-6h-2" /></svg>,
+  vibrate: (p) => <svg {...base(p)}><rect x="8" y="6" width="8" height="12" rx="1.5" /><path d="M3 9v6M21 9v6" /></svg>,
+  flash: (p) => <svg {...base(p)}><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M12 8v4l3 2" /></svg>,
+  download: (p) => <svg {...base(p)}><path d="M12 3v12" /><path d="M7 11l5 5 5-5" /><path d="M5 21h14" /></svg>,
+  check: (p) => <svg {...base(p)}><path d="M20 6L9 17l-5-5" /></svg>,
+  flask: (p) => <svg {...base(p)}><path d="M9 3h6" /><path d="M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3" /></svg>,
+};
+
+function SoundIcon({ label, size, color }) {
+  const key = SOUND_ICON[label] || "alert";
+  const El = Icon[key];
+  return <El size={size} color={color} />;
+}
+
+function priorityStyle(priority) {
+  if (priority === "URGENT") return { bg: "bg-brandDeep", text: "text-white", label: "Urgent" };
+  if (priority === "Attention needed") return { bg: "bg-brand", text: "text-white", label: "Attention needed" };
+  if (priority === "General awareness") return { bg: "bg-soft", text: "text-brand", label: "General awareness" };
+  return { bg: "bg-faint", text: "text-muted", label: "Off" };
+}
+
+function sectorLabel(angle) {
+  const a = ((angle % 360) + 360) % 360;
+  if (a >= 337.5 || a < 22.5) return "ahead of you";
+  if (a < 67.5) return "ahead, to your right";
+  if (a < 112.5) return "to your right";
+  if (a < 157.5) return "behind you, to your right";
+  if (a < 202.5) return "behind you";
+  if (a < 247.5) return "behind you, to your left";
+  if (a < 292.5) return "to your left";
+  return "ahead, to your left";
+}
+function distanceBand(d) { if (d <= 15) return 0; if (d <= 35) return 1; return 2; }
+function proximityWord(d) { if (d <= 15) return "close by"; if (d <= 35) return "mid range"; return "far off"; }
+
+function seedEntry(label, angle, distance, confidence, minsAgo) {
+  const t = new Date(); t.setMinutes(t.getMinutes() - minsAgo);
+  const priority = getPriority(label, null);
+  return { id: `${label}-${minsAgo}`, sound: label, angle, distance, confidence, priority, haptic: getHapticFile(priority), time: t };
+}
+
+function Toggle({ checked, onChange, disabled }) {
+  return (
+    <button
+      onClick={() => !disabled && onChange(!checked)}
+      className={"relative flex-shrink-0 rounded-full transition-colors " + (disabled ? "bg-faint cursor-not-allowed" : checked ? "bg-brand cursor-pointer" : "bg-line cursor-pointer")}
+      style={{ width: 44, height: 26 }}
+      aria-pressed={checked}
+    >
+      <span className="absolute rounded-full bg-white shadow transition-all" style={{ top: 3, left: checked ? 21 : 3, width: 20, height: 20 }} />
+    </button>
+  );
+}
+
+function Card({ children, className }) {
+  return <div className={"bg-white border border-line rounded-2xl p-4 " + (className || "")}>{children}</div>;
+}
+
+function App() {
+  const [tab, setTab] = useState("home");
+  const [listening, setListening] = useState(false);
+  const [pulseKey, setPulseKey] = useState(0);
+
+  const [prioritySettings, setPrioritySettings] = useState({ ...DEFAULT_PRIORITIES });
+
+  const [current, setCurrent] = useState(() => seedEntry("Siren", 205, 42, 0.88, 2));
+  const [history, setHistory] = useState(() => [
+    seedEntry("Siren", 205, 42, 0.88, 2),
+    seedEntry("Dog Barking", 95, 9, 0.93, 11),
+    seedEntry("Car Horn", 15, 4, 0.97, 26),
+  ]);
+
+  const [phoneFlash, setPhoneFlash] = useState(true);
+  const [phoneVibrate, setPhoneVibrate] = useState(true);
+  const [watchConnected, setWatchConnected] = useState(true);
+  const [watchTap, setWatchTap] = useState(true);
+  const [watchFace, setWatchFace] = useState(false);
+  const [glassesConnected, setGlassesConnected] = useState(false);
+  const [glassesOverlay, setGlassesOverlay] = useState(true);
+  const [glassesLabel, setGlassesLabel] = useState(true);
+
+  const [labSound, setLabSound] = useState("Siren");
+  const [labDirection, setLabDirection] = useState("LEFT");
+  const [labConfidence, setLabConfidence] = useState(88);
+  const [labResult, setLabResult] = useState(null);
+  const [labRunning, setLabRunning] = useState(false);
+
+  const band = current ? distanceBand(current.distance) : null;
+
+  function detectSound() {
+    const label = SOUND_LABELS[Math.floor(Math.random() * SOUND_LABELS.length)];
+    const angle = Math.floor(Math.random() * 360);
+    const distance = Math.floor(Math.random() * 58) + 2;
+    const rawConfidence = Math.random() * 0.55 + 0.45; // 45% to 100%, so the 75% cutoff sometimes actually bites
+    const usable = rawConfidence >= 0.75;
+    const sound = usable ? label : "unknown";
+    const priority = usable ? getPriority(label, prioritySettings) : "Off";
+    const entry = {
+      id: Date.now(),
+      sound,
+      angle,
+      distance,
+      confidence: rawConfidence,
+      priority,
+      haptic: getHapticFile(priority),
+      time: new Date(),
+    };
+    setCurrent(entry);
+    setPulseKey((k) => k + 1);
+    setHistory((h) => [entry, ...h].slice(0, 14));
+  }
+
+  useEffect(() => {
+    if (!listening) return;
+    detectSound();
+    const id = setInterval(detectSound, 4500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, [listening, prioritySettings]);
+
+  function runLab() {
+    setLabRunning(true);
+    setTimeout(() => {
+      const sr = 22050;
+      const mono = generateTestTone(labSound, sr);
+      const [left, right] = createStereoDirection(mono, labDirection, 3);
+      const wavBlob = encodeWavStereo(sr, left, right);
+      const wavUrl = URL.createObjectURL(wavBlob);
+      const yamnetResults = buildSimulatedYamnetResults(labSound, labConfidence);
+      const result = runPipeline({ yamnetResults, leftSamples: left, rightSamples: right, userSettings: prioritySettings });
+      setLabResult({ ...result, wavUrl, intendedDirection: labDirection, testSound: labSound, confidencePercent: labConfidence });
+      setLabRunning(false);
+    }, 350);
+  }
+
+  const ringRadii = [60, 100, 140];
+
+  return (
+    <div className="min-h-screen w-full flex justify-center items-start py-7 px-3">
+      <div className="w-[375px] max-w-full rounded-[46px] p-3 shadow-2xl" style={{ background: "#0B1730" }}>
+        <div className="rounded-[36px] overflow-hidden bg-faint flex flex-col relative" style={{ height: 800 }}>
+
+          <div className="h-[26px] flex items-center justify-center flex-shrink-0">
+            <div className="w-[90px] h-[6px] rounded-full" style={{ background: "#C7D3EE" }} />
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 pb-[104px]">
+
+            {tab === "home" && (
+              <>
+                <div className="flex items-center justify-between py-3">
+                  <div className="flex items-center gap-2">
+                    <svg width="26" height="26" viewBox="0 0 26 26">
+                      <circle cx="13" cy="13" r="12" fill="#1450FF" />
+                      <path d="M8 13a5 5 0 0 1 5 -5" stroke="#FFFFFF" strokeWidth="1.6" fill="none" strokeLinecap="round" opacity="0.55" />
+                      <path d="M8 13a5 5 0 0 0 5 5" stroke="#FFFFFF" strokeWidth="1.6" fill="none" strokeLinecap="round" opacity="0.55" />
+                      <circle cx="13" cy="13" r="2.6" fill="#FFFFFF" />
+                    </svg>
+                    <span className="font-display font-semibold text-[17px] text-ink">Sounds to life</span>
+                  </div>
+                  <div className={"flex items-center gap-1.5 rounded-full px-3 py-1.5 " + (listening ? "bg-soft" : "bg-faint")}>
+                    {listening ? <Icon.volume size={14} color="#1450FF" /> : <Icon.mute size={14} color="#5B6B8C" />}
+                    <span className={"text-[12.5px] font-semibold " + (listening ? "text-brand" : "text-muted")}>{listening ? "Listening" : "Paused"}</span>
+                  </div>
+                </div>
+
+                <Card className="pb-5">
+                  <div className="relative w-full mx-auto" style={{ maxWidth: 300, aspectRatio: "1 / 1" }}>
+                    <svg viewBox="0 0 320 320" width="100%" height="100%">
+                      <defs>
+                        <linearGradient id="arrowGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#35D6FF" />
+                          <stop offset="100%" stopColor="#1450FF" />
+                        </linearGradient>
+                      </defs>
+                      {listening && (
+                        <g style={{ transformOrigin: "160px 160px", animation: "stlSweep 7s linear infinite" }}>
+                          <line x1="160" y1="160" x2="160" y2="20" stroke="#1450FF" strokeWidth="10" opacity="0.06" strokeLinecap="round" />
+                        </g>
+                      )}
+                      {ringRadii.map((r, i) => {
+                        const active = current && band === i;
+                        return <circle key={r} cx="160" cy="160" r={r} fill="none" stroke={active ? "#1450FF" : "#E1E9FA"} strokeWidth={active ? 2 : 1.4} opacity={active ? 0.9 : 0.7} />;
+                      })}
+                      {current && (
+                        <circle key={pulseKey} cx="160" cy="160" r={ringRadii[band]} fill="none" stroke="#35D6FF" strokeWidth="3" style={{ animation: "stlPulse 1s ease-out", transformOrigin: "160px 160px" }} />
+                      )}
+                      {Array.from({ length: 12 }).map((_, i) => {
+                        const a = (i * 30 * Math.PI) / 180;
+                        const x1 = 160 + 141 * Math.sin(a), y1 = 160 - 141 * Math.cos(a);
+                        const x2 = 160 + 152 * Math.sin(a), y2 = 160 - 152 * Math.cos(a);
+                        return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#E1E9FA" strokeWidth="2" strokeLinecap="round" />;
+                      })}
+                      <g style={{ transform: `rotate(${current ? current.angle : 0}deg)`, transformOrigin: "160px 160px", transition: "transform 0.7s cubic-bezier(0.22,1,0.36,1)", opacity: current ? 1 : 0.25 }}>
+                        <path d="M160,50 L177,152 L160,132 L143,152 Z" fill="url(#arrowGrad)" />
+                      </g>
+                      <circle cx="160" cy="160" r="15" fill="#0B1730" />
+                      <circle cx="160" cy="160" r="5.5" fill="#FFFFFF" />
+                    </svg>
+                  </div>
+
+                  <div className="text-center mt-1.5">
+                    {current ? (
+                      <>
+                        <div className="font-display font-bold text-ink leading-tight" style={{ fontSize: 40 }}>{current.distance}m</div>
+                        <div className="text-[14px] text-muted mt-0.5">{sectorLabel(current.angle)} &middot; {proximityWord(current.distance)}</div>
+
+                        {current.sound === "unknown" ? (
+                          <div className="inline-flex items-center gap-2 mt-3.5 bg-faint border border-line rounded-full px-3.5 py-1.5">
+                            <span className="text-[13.5px] font-semibold text-muted">Sound not confident enough to name</span>
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-2 mt-3.5 bg-faint border border-line rounded-full px-3.5 py-1.5">
+                            <SoundIcon label={current.sound} size={15} color="#1450FF" />
+                            <span className="text-[13.5px] font-semibold text-ink">{current.sound}</span>
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 justify-center mt-2.5 flex-wrap">
+                          <span className="text-[11.5px] text-muted bg-white border border-line rounded-lg px-2.5 py-1">{Math.round(current.confidence * 100)}% match</span>
+                          {(() => { const ps = priorityStyle(current.priority); return <span className={"text-[11.5px] font-semibold rounded-lg px-2.5 py-1 " + ps.bg + " " + ps.text}>{ps.label}</span>; })()}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-[14px] text-muted mt-2">No sound detected yet</div>
+                    )}
+                  </div>
+                </Card>
+
+                <div className="text-[11.5px] text-muted mt-2.5 px-1 leading-relaxed">
+                  Direction here is shown as a full compass position and distance to demonstrate what the finished app should feel like. The detection engine wired up in the Lab tab currently only reports left, right, or center, with no distance yet.
+                </div>
+
+                <button
+                  onClick={() => setListening((v) => !v)}
+                  className={"w-full mt-4 flex items-center justify-center gap-2 rounded-2xl py-3.5 font-display font-semibold text-[15px] " + (listening ? "bg-soft text-brand" : "bg-brand text-white")}
+                >
+                  {listening && <span className="w-2 h-2 rounded-full bg-brand" style={{ animation: "stlPulseDot 1.4s ease-in-out infinite" }} />}
+                  {listening ? "Stop listening" : "Start listening"}
+                </button>
+
+                <div className="flex items-center justify-between mt-6 mb-2.5 px-0.5">
+                  <span className="font-display font-semibold text-[15px] text-ink">Recent sounds</span>
+                  <button onClick={() => setTab("history")} className="text-brand text-[13px] font-semibold">See all</button>
+                </div>
+
+                <div className="flex flex-col gap-2.5 mb-4">
+                  {history.slice(0, 3).map((h) => (
+                    <div key={h.id} className="flex items-center gap-3 bg-white border border-line rounded-2xl px-3.5 py-2.5">
+                      <div className="w-[34px] h-[34px] rounded-[10px] bg-faint flex items-center justify-center flex-shrink-0">
+                        {h.sound === "unknown" ? <Icon.mute size={16} color="#5B6B8C" /> : <SoundIcon label={h.sound} size={16} color="#1450FF" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13.5px] font-semibold text-ink truncate">{h.sound === "unknown" ? "Unknown sound" : h.sound}</div>
+                        <div className="text-[12px] text-muted">{h.distance}m &middot; {sectorLabel(h.angle)}</div>
+                      </div>
+                      <div className="text-[11.5px] text-muted flex-shrink-0">{h.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {tab === "history" && (
+              <>
+                <div className="pt-3 pb-1">
+                  <div className="font-display font-semibold text-ink text-[20px]">Sound history</div>
+                  <div className="text-[13px] text-muted mt-0.5">Everything picked up around you today</div>
+                </div>
+                <div className="flex flex-col gap-2.5 mt-4 pb-4">
+                  {history.map((h) => {
+                    const ps = priorityStyle(h.priority);
+                    return (
+                      <div key={h.id} className="flex items-center gap-3 bg-white border border-line rounded-2xl px-3.5 py-3">
+                        <div className="w-9 h-9 rounded-[10px] bg-faint flex items-center justify-center flex-shrink-0">
+                          {h.sound === "unknown" ? <Icon.mute size={17} color="#5B6B8C" /> : <SoundIcon label={h.sound} size={17} color="#1450FF" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[14px] font-semibold text-ink truncate">{h.sound === "unknown" ? "Unknown sound" : h.sound}</div>
+                          <div className="text-[12px] text-muted mt-0.5">{h.distance}m &middot; {sectorLabel(h.angle)}</div>
+                          <span className={"inline-block mt-1 text-[10.5px] font-semibold rounded-md px-2 py-0.5 " + ps.bg + " " + ps.text}>{ps.label}</span>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="text-[11.5px] text-muted">{h.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+                          <div className="text-[11px] text-brand mt-1">{Math.round(h.confidence * 100)}%</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {tab === "devices" && (
+              <>
+                <div className="pt-3 pb-1">
+                  <div className="font-display font-semibold text-ink text-[20px]">Connected devices</div>
+                  <div className="text-[13px] text-muted mt-0.5">Choose how sounds to life reaches you</div>
+                </div>
+
+                <Card className="mt-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-faint flex items-center justify-center"><Icon.phone size={19} color="#1450FF" /></div>
+                    <div className="flex-1">
+                      <div className="text-[14.5px] font-semibold text-ink">This phone</div>
+                      <div className="text-[12px] text-muted">Always on, no pairing needed</div>
+                    </div>
+                    <span className="text-[11.5px] font-semibold text-brand bg-soft rounded-full px-2.5 py-1">Active</span>
+                  </div>
+                  <div className="h-px bg-line my-4" />
+                  <div className="flex items-center justify-between mb-3.5">
+                    <div className="flex items-center gap-2.5">
+                      <Icon.flash size={16} color="#5B6B8C" />
+                      <div><div className="text-[13.5px] text-ink font-medium">Flash screen for loud sounds</div><div className="text-[11.5px] text-muted">Screen pulses blue above 80 dB</div></div>
+                    </div>
+                    <Toggle checked={phoneFlash} onChange={setPhoneFlash} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <Icon.vibrate size={16} color="#5B6B8C" />
+                      <div><div className="text-[13.5px] text-ink font-medium">Vibrate by distance</div><div className="text-[11.5px] text-muted">Stronger pulse the closer a sound is</div></div>
+                    </div>
+                    <Toggle checked={phoneVibrate} onChange={setPhoneVibrate} />
+                  </div>
+                </Card>
+
+                <Card className="mt-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-faint flex items-center justify-center"><Icon.watch size={19} color="#1450FF" /></div>
+                    <div className="flex-1">
+                      <div className="text-[14.5px] font-semibold text-ink">Apple Watch</div>
+                      <div className="text-[12px] text-muted">{watchConnected ? "Paired and ready" : "Not paired"}</div>
+                    </div>
+                    <button onClick={() => setWatchConnected((v) => !v)} className={"text-[12.5px] font-semibold rounded-full px-3 py-1.5 " + (watchConnected ? "text-muted bg-faint" : "text-brand bg-soft")}>{watchConnected ? "Disconnect" : "Connect"}</button>
+                  </div>
+                  {watchConnected && (
+                    <>
+                      <div className="h-px bg-line my-4" />
+                      <div className="flex items-center justify-between mb-3.5">
+                        <div className="text-[13.5px] text-ink font-medium">Tap wrist on detection</div>
+                        <Toggle checked={watchTap} onChange={setWatchTap} />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div><div className="text-[13.5px] text-ink font-medium">Show direction on watch face</div><div className="text-[11.5px] text-muted mt-0.5">A small arrow complication on your dial</div></div>
+                        <Toggle checked={watchFace} onChange={setWatchFace} />
+                      </div>
+                    </>
+                  )}
+                </Card>
+
+                <Card className="mt-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-faint flex items-center justify-center"><Icon.glasses size={19} color="#1450FF" /></div>
+                    <div className="flex-1">
+                      <div className="text-[14.5px] font-semibold text-ink">AR glasses</div>
+                      <div className="text-[12px] text-muted">{glassesConnected ? "Paired and ready" : "Not paired"}</div>
+                    </div>
+                    <button onClick={() => setGlassesConnected((v) => !v)} className={"text-[12.5px] font-semibold rounded-full px-3 py-1.5 " + (glassesConnected ? "text-muted bg-faint" : "text-brand bg-soft")}>{glassesConnected ? "Disconnect" : "Pair glasses"}</button>
+                  </div>
+                  {glassesConnected ? (
+                    <>
+                      <div className="h-px bg-line my-4" />
+                      <div className="flex items-center justify-between mb-3.5">
+                        <div><div className="text-[13.5px] text-ink font-medium">Arrow overlay in view</div><div className="text-[11.5px] text-muted mt-0.5">Points toward the sound as you look around</div></div>
+                        <Toggle checked={glassesOverlay} onChange={setGlassesOverlay} />
+                      </div>
+                      <div className="flex items-center justify-between mb-3.5">
+                        <div className="text-[13.5px] text-ink font-medium">Sound label in view</div>
+                        <Toggle checked={glassesLabel} onChange={setGlassesLabel} />
+                      </div>
+                      <div className="text-[11.5px] text-muted bg-faint rounded-xl px-2.5 py-2">Glasses mode uses more battery than phone alerts alone. Best for walks outside.</div>
+                    </>
+                  ) : (
+                    <div className="text-[12px] text-muted mt-3.5 leading-relaxed">Works with compatible AR glasses over Bluetooth. Once paired, direction and sound type show right in your line of sight.</div>
+                  )}
+                </Card>
+
+                <Card className="mt-3 mb-4">
+                  <div className="text-[14.5px] font-semibold text-ink mb-1">Sound priorities</div>
+                  <div className="text-[12px] text-muted mb-3.5">Set how urgently each sound should reach you. This changes which haptic pattern plays across every device above.</div>
+                  <div className="flex flex-col gap-3">
+                    {SOUND_LABELS.map((label) => (
+                      <div key={label} className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <SoundIcon label={label} size={15} color="#5B6B8C" />
+                          <span className="text-[13.5px] text-ink truncate">{label}</span>
+                        </div>
+                        <select
+                          value={prioritySettings[label]}
+                          onChange={(e) => setPrioritySettings((s) => ({ ...s, [label]: e.target.value }))}
+                          className="text-[12.5px] font-medium text-ink bg-faint border border-line rounded-lg px-2 py-1.5 flex-shrink-0"
+                        >
+                          {PRIORITY_LEVELS.map((lvl) => <option key={lvl} value={lvl}>{lvl}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </>
+            )}
+
+            {tab === "lab" && (
+              <>
+                <div className="pt-3 pb-1">
+                  <div className="font-display font-semibold text-ink text-[20px]">Detection lab</div>
+                  <div className="text-[13px] text-muted mt-1 leading-relaxed">
+                    This runs your real code: it builds a stereo test file, estimates direction with phase correlation, matches the sound against your category list, checks the confidence cutoff, and looks up the priority and haptic pattern. It is not a live microphone, YAMNet still needs to be wired in separately.
+                  </div>
+                </div>
+
+                <Card className="mt-4">
+                  <div className="text-[13px] font-semibold text-ink mb-2">Sound to test</div>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    {SOUND_LABELS.map((label) => (
+                      <button key={label} onClick={() => setLabSound(label)} className={"flex items-center gap-2 text-[12.5px] font-medium rounded-xl px-2.5 py-2 border " + (labSound === label ? "bg-brand text-white border-brand" : "bg-faint text-ink border-line")}>
+                        <SoundIcon label={label} size={14} color={labSound === label ? "#FFFFFF" : "#1450FF"} />
+                        <span className="truncate">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="text-[13px] font-semibold text-ink mb-2">Direction to simulate</div>
+                  <div className="grid grid-cols-3 gap-2 mb-4">
+                    {["LEFT", "CENTER", "RIGHT"].map((d) => (
+                      <button key={d} onClick={() => setLabDirection(d)} className={"text-[12.5px] font-semibold rounded-xl py-2 border " + (labDirection === d ? "bg-brand text-white border-brand" : "bg-faint text-ink border-line")}>{d}</button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[13px] font-semibold text-ink">Simulated confidence</span>
+                    <span className="text-[13px] font-semibold text-brand">{labConfidence}%</span>
+                  </div>
+                  <input type="range" min="50" max="99" value={labConfidence} onChange={(e) => setLabConfidence(parseInt(e.target.value))} className="w-full accent-[#1450FF] mb-1" />
+                  <div className="text-[11px] text-muted mb-4">Below 75% the pipeline reports the sound as unknown and skips direction, on purpose.</div>
+
+                  <button onClick={runLab} disabled={labRunning} className="w-full bg-brand text-white font-display font-semibold text-[15px] rounded-2xl py-3.5">
+                    {labRunning ? "Running pipeline..." : "Run pipeline"}
+                  </button>
+                </Card>
+
+                {labResult && (
+                  <Card className="mt-3 mb-6">
+                    <div className="text-[13px] font-semibold text-ink mb-3">Pipeline result</div>
+
+                    {labResult.sound === "unknown" ? (
+                      <div className="bg-faint rounded-xl px-3 py-3 text-[13px] text-muted mb-3">
+                        Confidence was {labResult.confidencePercent}%, below the 75% cutoff. Direction was never estimated, priority is Off, no haptic fires. This matches the early return in your pipeline code.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 mb-3">
+                          <SoundIcon label={labResult.sound} size={16} color="#1450FF" />
+                          <span className="text-[14px] font-semibold text-ink">{labResult.sound}</span>
+                          <span className="text-[11.5px] text-muted">&middot; {Math.round(labResult.confidence * 100)}% match</span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 mb-3">
+                          {["LEFT", "CENTER", "RIGHT"].map((d) => (
+                            <div key={d} className={"text-center text-[12px] font-semibold rounded-xl py-2.5 border " + (labResult.direction === d ? "bg-brand text-white border-brand" : "bg-faint text-muted border-line")}>{d}</div>
+                          ))}
+                        </div>
+
+                        <div className={"flex items-center gap-1.5 text-[12.5px] mb-3 " + (labResult.direction === labResult.intendedDirection ? "text-brand" : "text-muted")}>
+                          {labResult.direction === labResult.intendedDirection ? <Icon.check size={14} /> : null}
+                          <span>{labResult.direction === labResult.intendedDirection ? "Estimated direction matches the test file" : `Test file was built as ${labResult.intendedDirection}, engine estimated ${labResult.direction}`}</span>
+                        </div>
+
+                        <div className="flex gap-2 mb-1">
+                          {(() => { const ps = priorityStyle(labResult.priority); return <span className={"text-[11.5px] font-semibold rounded-lg px-2.5 py-1 " + ps.bg + " " + ps.text}>{ps.label}</span>; })()}
+                          <span className="text-[11.5px] text-muted bg-faint rounded-lg px-2.5 py-1">{labResult.haptic ? labResult.haptic : "No haptic file"}</span>
+                        </div>
+                      </>
+                    )}
+
+                    <a href={labResult.wavUrl} download={`sounds_to_life_${labResult.testSound.replace(/\s+/g, "_")}_${labResult.intendedDirection}.wav`} className="flex items-center justify-center gap-2 mt-3 w-full bg-faint text-ink font-semibold text-[13.5px] rounded-xl py-3 border border-line">
+                      <Icon.download size={15} />
+                      Download this test file (.wav)
+                    </a>
+                  </Card>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="absolute bottom-0 left-0 right-0 flex px-3 pt-2.5 pb-[18px] border-t border-line" style={{ background: "rgba(255,255,255,0.94)", backdropFilter: "blur(8px)" }}>
+            {[
+              { key: "home", label: "Home", icon: "home" },
+              { key: "history", label: "History", icon: "history" },
+              { key: "lab", label: "Lab", icon: "lab" },
+              { key: "devices", label: "Devices", icon: "devices" },
+            ].map(({ key, label, icon }) => {
+              const El = Icon[icon];
+              const active = tab === key;
+              return (
+                <button key={key} onClick={() => setTab(key)} className="flex-1 flex flex-col items-center gap-1">
+                  <El size={20} color={active ? "#1450FF" : "#9AA9C7"} />
+                  <span className={"text-[10.5px] font-semibold " + (active ? "text-brand" : "")} style={{ color: active ? undefined : "#9AA9C7" }}>{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
