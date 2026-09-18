@@ -19,6 +19,6 @@ def test_file(filename):
     print(f"Direction: {direction}")
 
 
-test_file("data/processed/siren_left.wav")
-test_file("data/processed/siren_right.wav")
-test_file("data/processed/siren_center.wav")
+test_file("data/processed/siren_1_left.wav")
+test_file("data/processed/siren_1_right.wav")
+test_file("data/processed/siren_1_center.wav")

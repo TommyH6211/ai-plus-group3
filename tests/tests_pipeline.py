@@ -4,7 +4,7 @@ from src.pipeline import SoundAwarenessPipeline
 pipeline = SoundAwarenessPipeline()
 
 result = pipeline.process(
-    "data/processed/siren_left.wav"
+    "data/processed/siren_1_left.wav"
 )
 
 print()
